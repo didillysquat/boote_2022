@@ -1,0 +1,4 @@
+*.nextflow*
+nf_processing/work
+raw_seq_data/
+references/
