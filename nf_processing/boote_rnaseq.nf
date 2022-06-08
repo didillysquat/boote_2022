@@ -32,7 +32,7 @@ montipora_kallisto_index = file("/home/humebc/projects/boote/references/Mdigitat
 // Run fastp on all samples
 process fastp{
     tag "${sample_name}"
-    conda "fastp"
+    container "biocontainers/fastp:v0.20.1_cv1"
     publishDir "/home/humebc/projects/boote/fastp/${species}", pattern: "*.html", mode: "copy"
 
     input:
