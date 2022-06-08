@@ -8,7 +8,7 @@ The input is a set of abundance tables from running Kallisto
 that are read in to run a DESEQ2 analysis.
 
 There is an associated meta info file boote_meta_info.csv. NB that I have spent some
-time cleaning up this .csv so use this one rather than some other.
+time cleaning this so use this one rather than some other.
 
 See the nextflow pipeline for details of the preprocessing that has been performed
 and details of the Kallisto run to create count tables.
@@ -29,6 +29,8 @@ library("DESeq2")
 library(apeglm)
 library(ashr)
 library(stringr)
+library("pheatmap")
+library("RColorBrewer")
 ```
 
 Parameters that will need changing per environment
@@ -68,6 +70,7 @@ meta_info$Species <- as.factor(unlist(lapply(str_split(meta_info$Species, patter
 # The sample names given do not exactly match the sample names as in the seq files
 # so pull out the sample names from the seq files instead
 meta_info$SampleName = str_extract(meta_info$Raw_read_R, "[:alpha:]+[:digit:]+")
+rownames(meta_info) = meta_info$SampleName
 ```
 
 Get the list of files for the given experimental setup
@@ -161,6 +164,53 @@ for (target_species in c("Acropora", "Montipora")){
 
 ```
 
+I want to have a quick look at the between sample similarities.
+The results are somewhat surprising. There is much more structure in Acropora
+than there is in Montipora. In Acropora the structure is not by treatment but rather by
+some other factor that doesn't seem to be detailed in the meta info sheet.
+```{r}
+target_species = "Montipora"
+perform_shrinkage = FALSE
+meta_info_sub = meta_info[meta_info$Species == target_species, ]
+files = get_file_list(meta_info_sub)
+tx2gene = make_tx2gene_df()
+txi = tximport(files, type = "kallisto", tx2gene = tx2gene)
+dds = DESeqDataSetFromTximport(txi, colData=meta_info_sub, design = ~ Treatment)
+dds = DESeq(dds)
 
+# # first take a look at Normoxy vs Deoxy
+# res = results(dds, contrast=c("Treatment", "Normoxy", "Deoxy"))
 
+rld <- rlog(dds, blind=FALSE)
+head(assay(rld))
 
+# generate distances
+sampleDists <- dist(t(assay(rld)))
+# convert to matrix format
+sampleDistMatrix <- as.matrix(sampleDists)
+# set the row and column names
+rownames(sampleDistMatrix) <- rld$SampleName
+colnames(sampleDistMatrix) <- rld$SampleName
+# Set the colors to use
+colors <- colorRampPalette(rev(brewer.pal(9, "Blues")))(255)
+# Generate a heat map to show the dissimilarities
+my_sample_col = data.frame(treatment = meta_info_sub$Treatment)
+row.names(my_sample_col) = colnames(sampleDistMatrix)
+if (target_species == "Acropora"){
+  pheatmap(sampleDistMatrix,
+          clustering_distance_rows=sampleDists,
+          clustering_distance_cols=sampleDists, annotation_col = my_sample_col,
+          cutree_rows=4,
+          cutree_cols=4,
+          col=colors, main="Acropora",
+          filename = file.path(base_output_dir, target_species, paste0(target_species, ".summary.png")))
+  
+}else{
+  pheatmap(sampleDistMatrix,
+          clustering_distance_rows=sampleDists,
+          clustering_distance_cols=sampleDists, annotation_col = my_sample_col,
+          filename = file.path(base_output_dir, target_species, paste0(target_species, ".summary.png")),
+          col=colors, main="Montipora")
+}
+
+```

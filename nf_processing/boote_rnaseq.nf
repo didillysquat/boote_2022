@@ -33,7 +33,7 @@ montipora_kallisto_index = file("/home/humebc/projects/boote/references/Mdigitat
 process fastp{
     tag "${sample_name}"
     conda "fastp"
-    publishDir "/home/humebc/projects/boote/fastp/${species}", pattern: "*.html"
+    publishDir "/home/humebc/projects/boote/fastp/${species}", pattern: "*.html", mode: "copy"
 
     input:
     tuple val(species), val(sample_name), path(reads) from acro_samples_ch.mix(monti_samples_ch)
@@ -52,7 +52,7 @@ process fastp{
 process kallisto{
     tag "${sample}"
     container "jennylsmith/kallistov45.0:latest"
-    publishDir "/home/humebc/projects/boote/kallisto_quant_results/${species}/${sample}"
+    publishDir "/home/humebc/projects/boote/kallisto_quant_results/${species}/${sample}", mode: "copy"
     cpus 10
 
     input:
