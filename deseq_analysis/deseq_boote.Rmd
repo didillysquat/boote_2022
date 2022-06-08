@@ -1,0 +1,166 @@
+---
+title: "Boote et al. 2022"
+output: html_notebook
+---
+
+This notebook is related to the DE analysis for Boote et al 2022
+The input is a set of abundance tables from running Kallisto
+that are read in to run a DESEQ2 analysis.
+
+There is an associated meta info file boote_meta_info.csv. NB that I have spent some
+time cleaning up this .csv so use this one rather than some other.
+
+See the nextflow pipeline for details of the preprocessing that has been performed
+and details of the Kallisto run to create count tables.
+
+There are two species: Acropora intermedia and Montipora digitata
+For each species there are three treatments Deoxy, Normoxy and Time_zero
+As a start this script will run pairwise comparisons of each of the treatments within each of the species
+
+I have output results with and without using schrinkage
+See here for further details: # see here: http://bioconductor.org/packages/devel/bioc/vignettes/DESeq2/inst/doc/DESeq2.html#log-fold-change-shrinkage-for-visualization-and-ranking
+
+Load required packages.
+```{r}
+library(tximport)
+library(readr)
+library(rhdf5)
+library("DESeq2")
+library(apeglm)
+library(ashr)
+library(stringr)
+```
+
+Parameters that will need changing per environment
+```{r}
+boot_base_dir <- "/home/humebc/projects/boote"
+
+# Full path to the meta info file
+meta_info_path <- file.path(boot_base_dir, "deseq_analysis/boote_meta_info.csv")
+
+# The directory containing the host and zooxs directories that
+# contain the by sample kallisto results
+kallisto_base_dir <- file.path(boot_base_dir, "kallisto_quant_results")
+
+# Directory where the results will be saved
+base_output_dir <- file.path(boot_base_dir, "deseq_analysis", "deseq_results")
+
+# A random selection of an Acropora and a Montipora sample to get the gene
+# sets from
+example_abund_table_path_acropora <- file.path(kallisto_base_dir, "Acropora", "AD1", "abundance.tsv")
+example_abund_table_path_montipora <- file.path(kallisto_base_dir, "Montipora", "MD1", "abundance.tsv")
+
+# The shrinkage method to implement
+shrinkage_method_string = "ashr"
+
+# In addition we will calculate the svalues using the ash function
+# The S-values are calculated using the log2FoldChange and lfcSE variables
+# or the non-shrinkage results
+# They are appended to the results df before output.
+```
+
+
+Get the meta info
+```{r}
+meta_info <- read.csv(meta_info_path)
+meta_info$Treatment <- as.factor(meta_info$Treatment)
+meta_info$Species <- as.factor(unlist(lapply(str_split(meta_info$Species, pattern=" "), '[[', 1)))
+# The sample names given do not exactly match the sample names as in the seq files
+# so pull out the sample names from the seq files instead
+meta_info$SampleName = str_extract(meta_info$Raw_read_R, "[:alpha:]+[:digit:]+")
+```
+
+Get the list of files for the given experimental setup
+```{r}
+get_file_list = function(submeta){
+  files <- file.path(kallisto_base_dir, target_species, submeta$SampleName, "abundance.h5")
+  names(files) <- submeta$SampleName
+  return(files)
+}
+```
+
+Make tx2gene df
+```{r}
+make_tx2gene_df = function(){
+  # Create the tx2gene files that maps transcript to gene
+  # In our case we are already working with gene so we will
+  # create a dummy df that maps gene to gene
+  # We will get the gene list from a random abundance table
+  if (target_species == "Acropora"){
+    example_table = read.table(example_abund_table_path_acropora, header = T)
+    tx_list = example_table$target_id
+    gene_list = str_extract(example_table$target_id, "aint_s[:digit:]+\\.g[:digit:]+")
+  }else if(target_species == "Montipora"){
+    example_table = read.table(example_abund_table_path_montipora, header = T)
+    tx_list = example_table$target_id
+    gene_list = str_extract(example_table$target_id, "TR[:digit:]+[:symbol:]{1}c[:digit:]+_g[:digit:]+")
+  } else{
+    stop(paste0("Unreconised value for target_species: ", target_species, "."))
+  }
+  return(data.frame("TXNAME"=tx_list, "GENEID"=gene_list))
+}    
+    
+```
+
+Output the CBASS.temperature contrasts (30vs33, 30vs36, 30vs39)
+within the specified Timepoint and LT as DESEQ results objects
+to a directory that is constructed from the 
+```{r}
+output_results = function(dds){
+    pairwise_combinations = combn(c("Normoxy", "Deoxy", "Time_zero"), 2)
+    for (i in 1:3){
+      condition_one = pairwise_combinations[1,i]
+      condition_two = pairwise_combinations[2,i]
+      if (perform_shrinkage){
+        # See here for further details https://rdrr.io/bioc/DESeq2/man/lfcShrink.html
+        # In the PNAS paper that chris sent me:
+        # https://onlinelibrary.wiley.com/doi/full/10.1111/mec.16064
+        # that I was supposed to be following as the methods they used the S-value
+        # to determine significant genes. The lfcShrink output does not give
+        # you the S-value output. As such I will append this to the
+        # res data.frame before output
+        # The S-values are calculated using the log2FoldChange and lfcSE variables
+        # or the non-shrinkage results
+        results_no_shrinkage = results(dds, contrast=c("Treatment", condition_one, condition_two))
+        ash_results = ash(results_no_shrinkage$log2FoldChange, results_no_shrinkage$lfcSE)
+        results_shrinkage = lfcShrink(dds, contrast=c("Treatment", condition_one, condition_two), type=shrinkage_method_string)
+        results_shrinkage$svalue = ash_results$result$svalue
+        save_path_csv = file.path(base_output_dir, target_species, "shrinkage", paste0(condition_one, "_", condition_two, "shrinkage", ".csv"))
+        save_path_obj = file.path(base_output_dir, target_species, "shrinkage", paste0(condition_one, "_", condition_two, "shrinkage", ".rds"))
+        if (!dir.exists(file.path(base_output_dir, target_species, "shrinkage"))) {dir.create(file.path(base_output_dir, target_species, "shrinkage"), recursive = T)}
+        write.csv(as.data.frame(results_shrinkage), file=save_path_csv)
+        saveRDS(results_shrinkage, file=save_path_obj)
+      }else{
+        save_path_csv = file.path(base_output_dir, target_species, "no_shrinkage", paste0(condition_one, "_", condition_two, "no_shrinkage", ".csv"))
+        save_path_obj = file.path(base_output_dir, target_species, "no_shrinkage", paste0(condition_one, "_", condition_two, "no_shrinkage", ".rds"))
+        res = results(dds, contrast=c("Treatment", condition_one, condition_two))
+        if (!dir.exists(file.path(base_output_dir, target_species, "no_shrinkage"))) {dir.create(file.path(base_output_dir, target_species, "no_shrinkage"), recursive = T)}
+        write.csv(as.data.frame(res), file=save_path_csv)
+        saveRDS(res, file=save_path_obj)
+      }
+    }
+}
+```
+
+
+Currently we have been asked to do all pairwise contrast of the treatments
+within each of the species.
+```{r}
+for (target_species in c("Acropora", "Montipora")){
+  for (perform_shrinkage in c(TRUE, FALSE)){
+    meta_info_sub = meta_info[meta_info$Species == target_species, ]
+    files = get_file_list(meta_info_sub)
+    tx2gene = make_tx2gene_df()
+    txi = tximport(files, type = "kallisto", tx2gene = tx2gene)
+    dds = DESeqDataSetFromTximport(txi, colData=meta_info_sub, design = ~ Treatment)
+    dds = DESeq(dds)
+    # Output the results for Normoxy vs Deoxy, Normoxy vs Trime_zero, Deoxy vs Time_zero
+    output_results(dds=dds)
+  }
+}
+
+```
+
+
+
+
