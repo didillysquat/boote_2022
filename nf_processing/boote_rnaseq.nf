@@ -33,7 +33,7 @@ montipora_kallisto_index = file("/home/humebc/projects/boote/references/Mdigitat
 process fastp{
     tag "${sample_name}"
     conda "fastp"
-    publishDir "/home/humebc/projects/boote/fastp/${species}"
+    publishDir "/home/humebc/projects/boote/fastp/${species}", pattern: "*.html"
 
     input:
     tuple val(species), val(sample_name), path(reads) from acro_samples_ch.mix(monti_samples_ch)
